@@ -7,6 +7,7 @@ This plugin enhances Hermes Agent's Feishu messaging capabilities by providing:
 """
 
 import logging
+import os
 
 from .schemas import SEND_FEISHU_CARD_SCHEMA, SEND_FEISHU_TABLE_SCHEMA
 from .sender import _has_credentials
@@ -74,13 +75,16 @@ def _on_pre_llm_call(
     Returns:
         Context dict to inject, or None.
     """
-    # Normalize platform name (case-insensitive check)
-    if not platform or platform.lower() not in ("feishu", "lark"):
+    normalized_platform = (platform or "").lower()
+
+    # Record current platform for tool-side validation and clear stale Feishu chat context
+    os.environ["HERMES_SESSION_PLATFORM"] = normalized_platform
+    if normalized_platform not in ("feishu", "lark"):
+        os.environ.pop("HERMES_SESSION_CHAT_ID", None)
         return None
 
     # Store chat_id in os.environ for tools to access
     # (contextvars don't propagate across thread pool boundary)
-    import os
     if chat_id:
         os.environ["HERMES_SESSION_CHAT_ID"] = chat_id
 
@@ -105,6 +109,7 @@ def _on_pre_llm_call(
             potential_chat_id = parts[4]
             if potential_chat_id.startswith(("oc_", "ou_", "gc_")):  # Feishu chat ID prefixes
                 chat_id = potential_chat_id
+                os.environ["HERMES_SESSION_CHAT_ID"] = chat_id
                 logger.info(f"[hermes-feishu] Extracted chat_id from session_id: {chat_id}")
 
     # Build context with chat_id - inject on EVERY turn to ensure LLM remembers
@@ -120,12 +125,12 @@ def _on_pre_llm_call(
         "**Reaction Feature**: Messages sent via tools will automatically get a DONE (✅) reaction.\n"
         "This indicates successful completion. No need to specify reaction parameter.\n"
     )
-    
+
     if chat_id:
         context += f"\n**Current chat_id**: `{chat_id}`\n"
         logger.info(f"[hermes-feishu] Injected chat_id into context: {chat_id}")
-    
+
     # Log injection for debugging
     logger.debug(f"[hermes-feishu] Injecting context (length={len(context)} chars)")
-    
+
     return {"context": context}
